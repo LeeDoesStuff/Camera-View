@@ -37,3 +37,27 @@ func TestParsers(t *testing.T) {
 		t.Fatalf("pactl: %v", a)
 	}
 }
+
+func TestAdjust(t *testing.T) {
+	base := Config{Contrast: 1, Saturation: 1, Gamma: 1}
+	if !newAdjust(base).noop {
+		t.Fatal("defaults should be a no-op")
+	}
+	lim := base
+	lim.LimitedRange = true
+	if a := newAdjust(lim); a.lut[16] != 0 || a.lut[235] != 255 || a.lut[0] != 0 {
+		t.Fatalf("limited range: 16->%d 235->%d", a.lut[16], a.lut[235])
+	}
+	grey := base
+	grey.Saturation = 0
+	pix := make([]byte, 4*1000)
+	for i := range pix {
+		pix[i] = byte(i * 7)
+	}
+	newAdjust(grey).apply(pix)
+	for i := 0; i < len(pix); i += 4 {
+		if pix[i] != pix[i+1] || pix[i+1] != pix[i+2] {
+			t.Fatalf("saturation 0 not grey at %d: %v", i, pix[i:i+3])
+		}
+	}
+}
