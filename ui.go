@@ -109,10 +109,11 @@ func newCapture(cfg Config, win *app.Window) *Capture {
 func (c *Capture) setStatus(s string) { c.status.Store(&s); c.win.Invalidate() }
 
 // Start (re)starts capture. dialog opens the driver's settings dialog first (Windows only).
-func (c *Capture) Start(dialog bool) {
+func (c *Capture) Start(video string, dialog bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.stopLocked()
+	c.cfg.Video = video
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	c.cancel, c.done = cancel, done
@@ -225,12 +226,15 @@ type UI struct {
 	th    *material.Theme
 	shown *image.RGBA
 
-	settingsBtn, fullscreenBtn, resetBtn, deviceBtn widget.Clickable
-	bright, contrast, sat, gamma                    widget.Float
-	limited                                         widget.Bool
-	sliders                                         []slider
-	open, fullscreen                                bool
-	lastMove                                        time.Time
+	settingsBtn, fullscreenBtn, resetBtn, deviceBtn, cameraBtn widget.Clickable
+	cams                                                       atomic.Pointer[[]Device] // nil while listing
+	camBtns                                                    []widget.Clickable
+	picking                                                    bool
+	bright, contrast, sat, gamma                               widget.Float
+	limited                                                    widget.Bool
+	sliders                                                    []slider
+	open, fullscreen                                           bool
+	lastMove                                                   time.Time
 }
 
 func runUI(cfg *Config, path string) error {
@@ -248,7 +252,7 @@ func runUI(cfg *Config, path string) error {
 		{"Gamma", &u.gamma, &cfg.Gamma, 0.5, 2},
 	}
 	u.syncWidgets()
-	u.cap.Start(false)
+	u.cap.Start(cfg.Video, false)
 	defer u.cap.Stop()
 
 	var ops op.Ops
@@ -291,7 +295,31 @@ func (u *UI) update(gtx layout.Context) {
 	}
 	if u.deviceBtn.Clicked(gtx) {
 		u.cap.setStatus("Opening device settings…")
-		go u.cap.Start(true)
+		go u.cap.Start(u.cfg.Video, true)
+	}
+	if u.cameraBtn.Clicked(gtx) {
+		u.picking = !u.picking
+		if u.picking {
+			u.cams.Store(nil)
+			go func() { // listing shells out to ffmpeg, keep it off the UI goroutine
+				video, _ := listDevices()
+				u.cams.Store(&video)
+				u.win.Invalidate()
+			}()
+		}
+	}
+	if cams := u.cams.Load(); cams != nil {
+		if len(u.camBtns) != len(*cams) {
+			u.camBtns = make([]widget.Clickable, len(*cams))
+		}
+		for i := range u.camBtns {
+			if u.camBtns[i].Clicked(gtx) {
+				d := (*cams)[i]
+				u.cfg.Video, u.picking = d.Value, false
+				u.cap.setStatus("Switching to " + d.Label + "…")
+				go u.cap.Start(d.Value, false)
+			}
+		}
 	}
 	changed := false
 	if u.resetBtn.Clicked(gtx) {
@@ -416,10 +444,14 @@ func (u *UI) panel(gtx layout.Context) layout.Dimensions {
 	rows = append(rows,
 		layout.Rigid(material.CheckBox(u.th, &u.limited, "Expand limited range (fixes washed-out greys)").Layout),
 		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			children := []layout.FlexChild{layout.Rigid(material.Button(u.th, &u.resetBtn, "Reset").Layout)}
+			gap := layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout)
+			children := []layout.FlexChild{
+				layout.Rigid(material.Button(u.th, &u.resetBtn, "Reset").Layout),
+				gap,
+				layout.Rigid(material.Button(u.th, &u.cameraBtn, "Change camera").Layout),
+			}
 			if runtime.GOOS == "windows" {
-				children = append(children,
-					layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+				children = append(children, gap,
 					layout.Rigid(material.Button(u.th, &u.deviceBtn, "Capture card settings…").Layout))
 			}
 			return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
@@ -427,5 +459,34 @@ func (u *UI) panel(gtx layout.Context) layout.Dimensions {
 			})
 		}),
 	)
+	if u.picking {
+		rows = append(rows, layout.Rigid(u.cameraList))
+	}
 	return layout.Flex{Axis: layout.Vertical}.Layout(gtx, rows...)
+}
+
+func (u *UI) cameraList(gtx layout.Context) layout.Dimensions {
+	cams := u.cams.Load()
+	if cams == nil || len(u.camBtns) != len(*cams) {
+		return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, material.Body2(u.th, "Finding cameras…").Layout)
+	}
+	if len(*cams) == 0 {
+		return layout.Inset{Top: unit.Dp(8)}.Layout(gtx, material.Body2(u.th, "No cameras found").Layout)
+	}
+	items := make([]layout.FlexChild, len(*cams))
+	for i, d := range *cams {
+		label := d.Label
+		if d.Value == u.cfg.Video {
+			label += "  (current)"
+		}
+		items[i] = layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				gtx.Constraints.Min.X = gtx.Constraints.Max.X
+				return material.Button(u.th, &u.camBtns[i], label).Layout(gtx)
+			})
+		})
+	}
+	return layout.Inset{Top: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx, items...)
+	})
 }

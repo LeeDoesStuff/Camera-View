@@ -24,7 +24,7 @@ The first run lists devices. The capture card's own audio device is preselected,
 
 In the window, move the mouse to show the top bar (it hides after 2s):
 
-- **Settings**: live brightness, contrast, saturation and gamma sliders, plus **Expand limited range**. Turn that on if blacks look grey and the picture looks washed out (the Xbox sends TV-range video but the card labels it full range). On Windows, **Capture card settings…** opens the card driver's own dialog.
+- **Settings**: live brightness, contrast, saturation and gamma sliders, plus **Expand limited range**. Turn that on if blacks look grey and the picture looks washed out (the Xbox sends TV-range video but the card labels it full range). On Windows, **Capture card settings…** opens the card driver's own dialog. **Change camera** lists video devices; click one to switch (saved for next launch).
 - **Fullscreen**: also `F`. `Esc` leaves fullscreen.
 
 Closing the window stops the audio too. Color settings are saved when you close.
